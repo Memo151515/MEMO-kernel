@@ -1,4 +1,4 @@
-# MEMO Kernel
+# MEMO
 
 **MEMO**, sıfırdan yazılmış, x86 mimarisi için Linux benzeri bir kernel'dir. Herhangi bir mevcut kernel kod tabanından (Linux, BSD vb.) kod alınmadan, GDT/IDT kurulumundan userspace'e kadar tüm katmanlar sıfırdan geliştirilmiştir.
 
@@ -48,15 +48,9 @@ This produces `memo.bin` (ELF) and `memo_flat.bin` (flat binary, for the bootloa
 
 ## Çalıştırma / Running
 
-MEMO kernel, kendi bootloader'ı olan [MBoot](https://github.com/Memo151515/MBoot) ile birlikte çalıştırılacak şekilde tasarlanmıştır (GRUB veya başka bir GPL'li bootloader kullanılmaz). Kernel'i test etmek için MBoot reposundaki talimatları izleyin.
+MEMO, kendi bootloader'ı olan [MBoot](https://github.com/Memo151515/MEMO-mboot) ile birlikte çalıştırılacak şekilde tasarlanmıştır (GRUB veya başka bir GPL'li bootloader kullanılmaz). Test etmek için MBoot reposundaki talimatları izleyin.
 
-MEMO kernel is designed to run with its own bootloader, [MBoot](https://github.com/Memo151515/MBoot) (no GRUB or other GPL-licensed bootloader is used). To test the kernel, follow the instructions in the MBoot repo.
-
-## Yol Haritası / Roadmap
-
-Bu kernel üzerine, kendi (GNU olmayan) userspace'ine sahip **MEMO OS** adlı bir işletim sistemi inşa edilecek.
-
-**MEMO OS**, an operating system with its own (non-GNU) userspace, will be built on top of this kernel.
+MEMO is designed to run with its own bootloader, [MBoot](https://github.com/Memo151515/MEMO-mboot) (no GRUB or other GPL-licensed bootloader is used). To test it, follow the instructions in the MBoot repo.
 
 ## Lisans / License
 
