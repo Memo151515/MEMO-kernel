@@ -1,59 +1,60 @@
-# MEMO
+# MNG/MEMO — MEMO Kernel 1.2.0
 
-**MEMO**, sıfırdan yazılmış, x86 mimarisi için Linux benzeri bir kernel'dir. Herhangi bir mevcut kernel kod tabanından (Linux, BSD vb.) kod alınmadan, GDT/IDT kurulumundan userspace'e kadar tüm katmanlar sıfırdan geliştirilmiştir.
+**MEMO**, sıfırdan yazılmış, Linux benzeri bir kernel'dir; üzerine kurulacak userland **MNG** ("MNG is Not GNU") ile birlikte sistemin adı **MNG/MEMO** olur (GNU/Linux gibi).
+**MEMO** is a from-scratch, Linux-like kernel. Together with the **MNG** userland ("MNG is Not GNU") the system is called **MNG/MEMO**.
 
-A **Linux-like kernel for x86, written entirely from scratch**. No code was taken from any existing kernel codebase (Linux, BSD, etc.) — every layer, from GDT/IDT setup to userspace, was built from the ground up.
+## Durum / Status
 
-## Özellikler / Features
+| Alan / Area | Durum / State |
+|---|---|
+| x86_64 (higher-half, long mode) ve i386 | çalışıyor / working (`make ARCH=...`) |
+| MBoot v1.1 (BIOS), VBE framebuffer, E820 | çalışıyor / working |
+| Süreç başına bellek alanı, ELF yükleyici / per-process address spaces, ELF loader | **x86_64**, statik ELF (static / static-PIE) |
+| Linux x86_64 syscall uyumluluğu / Linux syscall ABI | temel set: glibc'li statik programlar çalışıyor / basic set, static glibc programs run |
+| ext2 / ext3 / **ext4** | **salt okunur / read-only** (extents, 64-bit, htree); yazma + journal yok / no write, no journal |
+| Ağ / Networking | **Intel e1000** + ARP, IPv4, ICMP (ping), UDP, DHCP (x86_64) |
+| Sürücüler / Drivers | PIT, PIC, PS/2, UART, RTC, PCI, ATA PIO, e1000, VBE/VGA konsol |
+| Klavye / Keyboard | us uk de fr es it tr dvorak colemak (`loadkeys`) |
+| Shell | ~60 komut / commands |
 
-- Kendi GDT (Global Descriptor Table) ve IDT (Interrupt Descriptor Table) kurulumu
-  Custom GDT (Global Descriptor Table) and IDT (Interrupt Descriptor Table) setup
-- CPU exception handling (divide-by-zero, page fault, general protection fault vb.)
-  CPU exception handling (divide-by-zero, page fault, general protection fault, etc.)
-- IRQ/PIC tabanlı donanım kesme yönetimi
-  IRQ/PIC-based hardware interrupt management
-- PS/2 klavye sürücüsü
-  PS/2 keyboard driver
-- Basit bir kernel-mode shell (`help`, `clear`, `about`, `uptime`, `ls`, `write`, `cat`)
-  A simple kernel-mode shell (`help`, `clear`, `about`, `uptime`, `ls`, `write`, `cat`)
-- Paging (sanal bellek yönetimi, identity-mapped ilk 4MB)
-  Paging (virtual memory management, first 4MB identity-mapped)
-- Kernel heap (`kmalloc`)
-  Kernel heap (`kmalloc`)
-- PIT (Programmable Interval Timer) tabanlı preemptive multitasking
-  PIT (Programmable Interval Timer)-based preemptive multitasking
-- Syscall arayüzü (`int 0x80`)
-  Syscall interface (`int 0x80`)
-- Basit bellek içi (in-memory) dosya sistemi
-  Simple in-memory file system
-- TSS (Task State Segment) ve userspace (ring 3) desteği
-  TSS (Task State Segment) and userspace (ring 3) support
+### Henüz yok / Not yet (yol haritası / roadmap)
+- **TCP, DNS**, soketler; **WiFi** (802.11 + firmware + WPA2), RTL8139/RTL8169/virtio-net sürücüleri
+- **Dinamik linkleme** (ld.so / `PT_INTERP`), `fork`/`execve`/`wait4`/`clone`/threads, pipe, signals → busybox, Wine, glibc'li çoğu program
+- **Çekirdek modülü uyumluluk katmanı (LinuxKPI benzeri)**: Linux kernel API'sini taklit eden bir katman — NVIDIA'nın kapalı `nvidia.ko` sürücüsü için gerekli, çok büyük bir iş
+- **ext4 yazma**, VFS katmanı, `/proc` `/sys` `/dev`
+- **Gerçek PC**: şu an yalnızca eski BIOS/CSM boot (MBoot). UEFI önyükleme (GOP framebuffer) + ACPI + AHCI/NVMe + USB (klavye/fare) gerekli. QEMU'da test edildi, **gerçek donanımda denenmedi**.
+- **Wayland/X11 ve masaüstü (Hyprland, XFCE, KDE Plasma)**: DRM/KMS, evdev, Mesa + GPU sürücüsü, unix soketleri, mmap/poll/epoll/eventfd, shm, D-Bus gerekir
 
-## Gereksinimler / Requirements
+## Derleme / Building
+```sh
+make defconfig            # veya: make menuconfig
+make                      # i386
+make ARCH=x86_64          # 64-bit (süreçler, ağ ve Linux uyumluluk burada)
+make CROSS=               # cross-compiler yerine sistem gcc'si
+make rootfs               # build/rootfs.ext4: ext4 imaj + örnek glibc programı
+make ARCH=x86_64 image run   # ../MEMO-mboot ile disk imajı üret, QEMU'da başlat (ağ + 2. disk dahil)
+```
+Gerekenler / needs: `gcc` (ya da `x86_64-elf-gcc`), `binutils`, `nasm`, `qemu`, `e2fsprogs` (rootfs için), `libc6-dev` (statik glibc).
 
-- `x86_64-elf-gcc` ve `x86_64-elf-binutils` (cross-compiler)
-- `nasm`
-- `qemu` (test için / for testing)
-
-## Derleme / Build
-
-```bash
-make clean
-make
+Örnek oturum / example session:
+```
+root@memo:/# ls /disk/bin
+root@memo:/# exec /disk/bin/hello a b      # glibc ile derlenmiş Linux programı
+root@memo:/# ping 10.0.2.2                 # QEMU kullanıcı ağı
+root@memo:/# loadkeys tr
 ```
 
-Bu, `memo.bin` (ELF) ve `memo_flat.bin` (flat binary, bootloader için) dosyalarını üretir.
-
-This produces `memo.bin` (ELF) and `memo_flat.bin` (flat binary, for the bootloader).
-
-## Çalıştırma / Running
-
-MEMO, kendi bootloader'ı olan [MBoot](https://github.com/Memo151515/MEMO-mboot) ile birlikte çalıştırılacak şekilde tasarlanmıştır (GRUB veya başka bir GPL'li bootloader kullanılmaz). Test etmek için MBoot reposundaki talimatları izleyin.
-
-MEMO is designed to run with its own bootloader, [MBoot](https://github.com/Memo151515/MEMO-mboot) (no GRUB or other GPL-licensed bootloader is used). To test it, follow the instructions in the MBoot repo.
+## Klasörler / Layout
+```
+arch/x86 arch/i386 arch/x86_64   mimari kodu / architecture code
+kernel/        main, irq, scheduler, mm/pmm, syscall, proc/ (vm, elf, Linux syscall'ları), net/ (IPv4 yığını)
+mm/ lib/ fs/   heap, string/printf, ramfs, ext2/3/4 (salt okunur)
+drivers/       console, serial, keyboard, pic, pit, rtc, pci, block/ata, net/e1000
+shell/         shell + cmd_*.c
+include/memo/  başlıklar / headers (version.h: MNG/MEMO 1.2.0)
+tools/ configs/ scripts/
+```
+Yeni sürücü: `device_initcall()` / `late_initcall()` + `driver_register()`. Yeni komut: `SHELL_CMD(...)`.
 
 ## Lisans / License
-
-Bu proje **MEMO Free Code License (MFCL)** ile lisanslanmıştır — kodu istediğiniz gibi değiştirebilir, kapalı kaynak türevler oluşturabilirsiniz; tek şart orijinal yazara atıf yapmaktır. Detaylar için `LICENSE` dosyasına bakın.
-
-This project is licensed under the **MEMO Free Code License (MFCL)** — you may modify the code freely and create closed-source derivatives; the only requirement is crediting the original author. See the `LICENSE` file for details.
+MEMO Free Code License (MFCL) — bkz. `LICENSE`.

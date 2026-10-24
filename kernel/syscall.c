@@ -1,32 +1,29 @@
-#include "syscall.h"
-#include "isr.h"
-#include <stdint.h>
+/* MNG/MEMO - system call dispatcher (int 0x80) */
+#include <memo/console.h>
+#include <memo/arch.h>
+#include <memo/sched.h>
 
-static uint16_t* const VGA_MEMORY = (uint16_t*) 0xB8000;
-static const int VGA_WIDTH = 80;
-
-#define SYS_WRITE 1
-
-static int syscall_cursor = 22 * 80; 
-
-static void sys_write(const char* str) {
-    for (int i = 0; str[i] != '\0'; i++) {
-        VGA_MEMORY[syscall_cursor++] = (uint16_t) str[i] | (uint16_t) 0x0E00;
-    }
+/* ring-3 code may only hand the kernel pointers inside the user region */
+static bool user_range_ok(uintptr_t p, size_t len) {
+    uintptr_t s = (uintptr_t)__user_start, e = (uintptr_t)__user_end;
+    return len <= e - s && p >= s && p <= e - len;
 }
 
-void syscall_handler(registers_t regs) {
-    switch (regs.eax) {
-        case SYS_WRITE:
-            sys_write((const char*) regs.ebx);
-            break;
-        default:
-            break;
+void syscall_dispatch(struct regs *r) {
+    long ret = -EINVAL;
+    switch (SYSCALL_NR(r)) {
+    case SYS_WRITE: {
+        uintptr_t buf = (uintptr_t)SYSCALL_A1(r);
+        size_t len = (size_t)SYSCALL_A2(r);
+        if (!user_range_ok(buf, len)) { ret = -EINVAL; break; }
+        console_write((const char *)buf, len);
+        ret = (long)len;
+        break; }
+    case SYS_EXIT:   task_exit();
+    case SYS_GETPID: ret = (long)task_current()->pid; break;
+    case SYS_UPTIME: ret = (long)uptime_ms(); break;
+    case SYS_SLEEP:  task_sleep_ms((uint32_t)SYSCALL_A1(r)); ret = 0; break;
+    case SYS_YIELD:  task_yield(); ret = 0; break;
     }
-}
-
-void syscall_install(void) {
-    extern void idt_set_gate_ext(uint8_t num, uint32_t base, uint16_t sel, uint8_t flags);
-    extern void isr128();
-    idt_set_gate_ext(0x80, (uint32_t)isr128, 0x08, 0xEE);
+    SYSCALL_RET(r) = (uintptr_t)ret;
 }

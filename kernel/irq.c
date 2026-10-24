@@ -1,68 +1,48 @@
-#include "irq.h"
+/* MNG/MEMO - interrupt/exception dispatch (common to all architectures) */
+#include <memo/console.h>
+#include <memo/arch.h>
+#include <memo/sched.h>
 
-static isr_t irq_routines[16] = { 0 };
+static irq_handler_t handlers[16];
 
-void irq_install_handler(int irq, isr_t handler) {
-    irq_routines[irq] = handler;
+void irq_install_handler(int irq, irq_handler_t h) {
+    handlers[irq] = h;
+    pic_unmask(irq);
 }
 
-void irq_uninstall_handler(int irq) {
-    irq_routines[irq] = 0;
-}
+static const char *const exc_names[32] = {
+    "Divide error", "Debug", "NMI", "Breakpoint", "Overflow", "Bound range exceeded",
+    "Invalid opcode", "Device not available", "Double fault", "Coprocessor overrun",
+    "Invalid TSS", "Segment not present", "Stack fault", "General protection fault",
+    "Page fault", "Reserved", "x87 FPU error", "Alignment check", "Machine check",
+    "SIMD FP exception", "Virtualization", "Control protection", "Reserved", "Reserved",
+    "Reserved", "Reserved", "Reserved", "Reserved", "Reserved", "Reserved", "Security", "Reserved",
+};
 
-static inline void outb(uint16_t port, uint8_t val) {
-    __asm__ volatile ("outb %0, %1" : : "a"(val), "Nd"(port));
-}
-
-static void pic_remap(void) {
-    outb(0x20, 0x11);
-    outb(0xA0, 0x11);
-    outb(0x21, 0x20); 
-    outb(0xA1, 0x28); 
-    outb(0x21, 0x04);
-    outb(0xA1, 0x02);
-    outb(0x21, 0x01);
-    outb(0xA1, 0x01);
-    outb(0x21, 0x0);
-    outb(0xA1, 0x0);
-}
-
-extern void irq0();  extern void irq1();  extern void irq2();  extern void irq3();
-extern void irq4();  extern void irq5();  extern void irq6();  extern void irq7();
-extern void irq8();  extern void irq9();  extern void irq10(); extern void irq11();
-extern void irq12(); extern void irq13(); extern void irq14(); extern void irq15();
-
-extern void idt_set_gate_ext(uint8_t num, uint32_t base, uint16_t sel, uint8_t flags);
-
-void irq_install(void) {
-    pic_remap();
-
-    idt_set_gate_ext(32, (uint32_t)irq0, 0x08, 0x8E);
-    idt_set_gate_ext(33, (uint32_t)irq1, 0x08, 0x8E);
-    idt_set_gate_ext(34, (uint32_t)irq2, 0x08, 0x8E);
-    idt_set_gate_ext(35, (uint32_t)irq3, 0x08, 0x8E);
-    idt_set_gate_ext(36, (uint32_t)irq4, 0x08, 0x8E);
-    idt_set_gate_ext(37, (uint32_t)irq5, 0x08, 0x8E);
-    idt_set_gate_ext(38, (uint32_t)irq6, 0x08, 0x8E);
-    idt_set_gate_ext(39, (uint32_t)irq7, 0x08, 0x8E);
-    idt_set_gate_ext(40, (uint32_t)irq8, 0x08, 0x8E);
-    idt_set_gate_ext(41, (uint32_t)irq9, 0x08, 0x8E);
-    idt_set_gate_ext(42, (uint32_t)irq10, 0x08, 0x8E);
-    idt_set_gate_ext(43, (uint32_t)irq11, 0x08, 0x8E);
-    idt_set_gate_ext(44, (uint32_t)irq12, 0x08, 0x8E);
-    idt_set_gate_ext(45, (uint32_t)irq13, 0x08, 0x8E);
-    idt_set_gate_ext(46, (uint32_t)irq14, 0x08, 0x8E);
-    idt_set_gate_ext(47, (uint32_t)irq15, 0x08, 0x8E);
-}
-
-void irq_handler(registers_t regs) {
-    if (regs.int_no >= 40) {
-        outb(0xA0, 0x20); 
+static void exception(struct regs *r) {
+    uint32_t n = (uint32_t)r->int_no;
+    console_set_color(C_LRED, C_BLACK);
+    printk("\n[EXCEPTION %u] %s at ip=%p err=%#x", n, exc_names[n], (void *)(uintptr_t)REGS_IP(r), (unsigned)r->err_code);
+    if (n == 14) printk(" cr2=%p", (void *)read_cr2());
+    printk("\n");
+    console_set_color(C_LGRAY, C_BLACK);
+    if (arch_regs_from_user(r)) {
+        printk("User task '%s' (pid %u) killed.\n", task_current()->name, task_current()->pid);
+        task_exit();
     }
-    outb(0x20, 0x20); 
+    arch_dump_regs(r);
+    panic("unhandled %s in kernel mode", exc_names[n]);
+}
 
-    if (irq_routines[regs.int_no - 32] != 0) {
-        isr_t handler = irq_routines[regs.int_no - 32];
-        handler(regs);
+void interrupt_dispatch(struct regs *r) {
+    uint32_t n = (uint32_t)r->int_no;
+    if (n < 32) { exception(r); return; }
+    if (n < 48) {
+        int irq = (int)n - 32;
+        if (pic_is_spurious(irq)) return;
+        pic_eoi(irq);                       /* EOI first: handlers may switch tasks */
+        if (handlers[irq]) handlers[irq](r);
+        return;
     }
+    if (n == 0x80) syscall_dispatch(r);
 }

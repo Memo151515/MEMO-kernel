@@ -1,0 +1,8 @@
+*.bin
+*.d
+*.elf
+*.img
+*.o
+.config
+build/
+rootfs/bin/hello

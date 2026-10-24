@@ -1,83 +1,121 @@
-CC = x86_64-elf-gcc
-AS = nasm
-LD = x86_64-elf-ld
+# MNG/MEMO kernel build system (Kbuild-lite)
+#
+#   make defconfig            default configuration (i386)      -> .config
+#   make menuconfig           answer questions, edit .config
+#   make                      build for ARCH from .config
+#   make ARCH=x86_64          build the 64-bit kernel
+#   make run                  build + boot in QEMU through MBoot
+#   make clean | distclean
+#
+# CROSS defaults to x86_64-elf- (cross toolchain). On a normal Linux box you can use the host
+# toolchain: make CROSS=
 
-CFLAGS = -ffreestanding -m32 -fno-stack-protector -fno-pie -Wall -Wextra -mno-sse -mno-sse2 -mno-mmx -mno-80387 -mgeneral-regs-only
-ASFLAGS = -f elf32
-LDFLAGS = -T linker.ld -melf_i386
+-include .config
+ARCH   ?= i386
+CROSS  ?= x86_64-elf-
+MBOOT  ?= ../MEMO-mboot
+CC      = $(CROSS)gcc
+LD      = $(CROSS)ld
+OBJCOPY = $(CROSS)objcopy
+NASM   ?= nasm
+BUILD   = build/$(ARCH)
 
-OBJS = boot/boot.o boot/gdt_flush.o boot/idt_flush.o boot/isr.o boot/irq.o boot/paging_enable.o boot/switch_to.o boot/usermode_jump.o kernel/kernel.o kernel/gdt.o kernel/idt.o kernel/isr.o kernel/irq.o kernel/keyboard.o kernel/paging.o kernel/kheap.o kernel/timer.o kernel/task.o kernel/syscall.o kernel/fs.o kernel/tss.o
+ifeq ($(ARCH),i386)
+  CARCH   = -m32
+  NASMFMT = elf32
+  LDEMU   = elf_i386
+else ifeq ($(ARCH),x86_64)
+  CARCH   = -m64 -mno-red-zone -mcmodel=kernel
+  NASMFMT = elf64
+  LDEMU   = elf_x86_64
+else
+  $(error Unknown ARCH '$(ARCH)' - use i386 or x86_64)
+endif
 
-all: memo_flat.bin
+ifeq ($(CONFIG_DEBUG),y)
+  OPT = -O0 -g
+else
+  OPT = -O2
+endif
 
-boot/boot.o: boot/boot.asm
-	$(AS) $(ASFLAGS) $< -o $@
+CONFIG_OPTIONS := CONFIG_SERIAL CONFIG_PCI CONFIG_ATA CONFIG_RTC CONFIG_DEBUG
+KEYMAP ?= us
+CONFIG_DEFS := -DDEFAULT_KEYMAP=\"$(KEYMAP)\" $(foreach v,$(CONFIG_OPTIONS),$(if $(filter y,$($(v))),-D$(v)=1))
 
-boot/gdt_flush.o: boot/gdt_flush.asm
-	$(AS) $(ASFLAGS) $< -o $@
+CFLAGS = $(CARCH) $(OPT) -std=gnu11 -Wall -Wextra -ffreestanding -fno-builtin -fno-stack-protector \
+         -fno-pie -fno-pic -fno-asynchronous-unwind-tables -fno-tree-loop-distribute-patterns \
+         -mgeneral-regs-only -MMD -MP \
+         -Iinclude -Iarch/x86/include -Iarch/$(ARCH)/include $(CONFIG_DEFS)
+LDFLAGS = -m $(LDEMU) -T arch/$(ARCH)/linker.ld -nostdlib -z noexecstack -z max-page-size=0x1000 --no-warn-rwx-segments
 
-boot/idt_flush.o: boot/idt_flush.asm
-	$(AS) $(ASFLAGS) $< -o $@
+obj-y  := kernel/main.o kernel/printk.o kernel/bootinfo.o kernel/initcall.o kernel/irq.o \
+          kernel/sched.o kernel/mm.o
+ifeq ($(ARCH),x86_64)
+obj-y  += kernel/pmm.o kernel/proc_stub.o kernel/proc/vm.o kernel/proc/elf.o kernel/proc/proc.o kernel/proc/linux.o shell/cmd_proc.o
+else
+obj-y  += kernel/syscall.o kernel/user_demo.o
+endif
+obj-y  += lib/string.o lib/vsprintf.o mm/heap.o fs/ramfs.o fs/ext2.o
+obj-y  += drivers/console/console.o drivers/pic/pic.o drivers/timer/pit.o drivers/input/keyboard.o drivers/stubs.o
+obj-y  += shell/shell.o shell/cmd_core.o shell/cmd_fs.o shell/cmd_sys.o
+obj-y  += drivers/serial/serial.o kernel/net/net.o drivers/net/e1000.o shell/cmd_net.o
+obj-$(CONFIG_PCI) += drivers/pci/pci.o
+obj-$(CONFIG_ATA) += drivers/block/ata.o
+obj-$(CONFIG_RTC) += drivers/rtc/rtc.o
+arch-y := arch/$(ARCH)/boot.o arch/$(ARCH)/stubs.o arch/$(ARCH)/cpu.o arch/$(ARCH)/mm.o
 
-boot/isr.o: boot/isr.asm
-	$(AS) $(ASFLAGS) $< -o $@
+OBJS = $(addprefix $(BUILD)/,$(arch-y) $(obj-y))
+ELF  = $(BUILD)/memo-$(ARCH).elf
+FLAT = $(BUILD)/memo_flat.bin
+Q    = $(if $(V),,@)
 
-boot/irq.o: boot/irq.asm
-	$(AS) $(ASFLAGS) $< -o $@
+all: $(FLAT)
 
-boot/paging_enable.o: boot/paging_enable.asm
-	$(AS) $(ASFLAGS) $< -o $@
+$(BUILD)/%.o: %.c
+	$(Q)mkdir -p $(dir $@)
+	@echo "  CC   $<"
+	$(Q)$(CC) $(CFLAGS) -c $< -o $@
 
-boot/switch_to.o: boot/switch_to.asm
-	$(AS) $(ASFLAGS) $< -o $@
+$(BUILD)/%.o: %.asm
+	$(Q)mkdir -p $(dir $@)
+	@echo "  NASM $<"
+	$(Q)$(NASM) -f $(NASMFMT) $< -o $@
 
-boot/usermode_jump.o: boot/usermode_jump.asm
-	$(AS) $(ASFLAGS) $< -o $@
+$(ELF): $(OBJS) arch/$(ARCH)/linker.ld
+	@echo "  LD   $@"
+	$(Q)$(LD) $(LDFLAGS) -o $@ $(OBJS)
 
-kernel/kernel.o: kernel/kernel.c
-	$(CC) $(CFLAGS) -c $< -o $@
+$(FLAT): $(ELF)
+	@echo "  BIN  $@"
+	$(Q)$(OBJCOPY) -O binary $< $@
+	$(Q)size=$$(wc -c < $@); echo "  $(MEMO_NAME) $(ARCH): $$size bytes"; \
+	  if [ $$size -gt 524288 ]; then echo "ERROR: kernel is bigger than the 512 KiB MBoot loads"; rm -f $@; exit 1; fi
 
-kernel/gdt.o: kernel/gdt.c
-	$(CC) $(CFLAGS) -c $< -o $@
+defconfig:
+	cp configs/defconfig .config
+x86_64_defconfig:
+	cp configs/x86_64_defconfig .config
+menuconfig:
+	@./scripts/menuconfig.sh
 
-kernel/idt.o: kernel/idt.c
-	$(CC) $(CFLAGS) -c $< -o $@
+install-mboot: $(FLAT)
+	cp $(FLAT) $(MBOOT)/memo_flat.bin
 
-kernel/isr.o: kernel/isr.c
-	$(CC) $(CFLAGS) -c $< -o $@
+image: $(FLAT)
+	$(MBOOT)/mkdisk.sh $(FLAT) $(BUILD)/disk.img
 
-kernel/irq.o: kernel/irq.c
-	$(CC) $(CFLAGS) -c $< -o $@
+rootfs:
+	./tools/mkrootfs.sh
 
-kernel/keyboard.o: kernel/keyboard.c
-	$(CC) $(CFLAGS) -c $< -o $@
-
-kernel/paging.o: kernel/paging.c
-	$(CC) $(CFLAGS) -c $< -o $@
-
-kernel/kheap.o: kernel/kheap.c
-	$(CC) $(CFLAGS) -c $< -o $@
-
-kernel/timer.o: kernel/timer.c
-	$(CC) $(CFLAGS) -c $< -o $@
-
-kernel/task.o: kernel/task.c
-	$(CC) $(CFLAGS) -c $< -o $@
-
-kernel/syscall.o: kernel/syscall.c
-	$(CC) $(CFLAGS) -c $< -o $@
-
-kernel/fs.o: kernel/fs.c
-	$(CC) $(CFLAGS) -c $< -o $@
-
-kernel/tss.o: kernel/tss.c
-	$(CC) $(CFLAGS) -c $< -o $@
-
-memo.bin: $(OBJS)
-	$(LD) $(LDFLAGS) -o $@ $(OBJS)
-
-memo_flat.bin: memo.bin
-	x86_64-elf-objcopy -O binary memo.bin memo_flat.bin
+run: image
+	qemu-system-x86_64 -drive file=$(BUILD)/disk.img,format=raw,if=ide,index=0 \
+	  $(if $(wildcard build/rootfs.ext4),-drive file=build/rootfs.ext4,format=raw,if=ide,index=1) \
+	  -m 256 -vga std -serial stdio -nic user,model=e1000
 
 clean:
-	rm -f boot/*.o kernel/*.o memo.bin memo_flat.bin
+	rm -rf build
+distclean: clean
+	rm -f .config
+
+.PHONY: rootfs all defconfig x86_64_defconfig menuconfig install-mboot image run clean distclean
+-include $(OBJS:.o=.d)
